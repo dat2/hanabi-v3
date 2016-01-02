@@ -1,20 +1,35 @@
 const R = require('ramda');
 
+// https://clojuredocs.org/clojure.core/get
+// need a default because the arguments order is changed
+// object is last
 const getDefault = R.curry((key, deflt, obj) => R.defaultTo(deflt)(obj[key]));
 const get = R.curry((key, obj) => getDefault(key, null, obj));
 
+// https://clojuredocs.org/clojure.core/get-in
+// changed `in` to `path` because of Ramda js
 const getPathDefault = R.curry((keys, deflt, obj) => {
   return keys.reduce((obj, key, i) => obj[key] || (i === keys.length - 1 ? deflt : {}), obj)
 });
 const getPath = R.curry((keys, obj) => getPathDefault(keys, null, obj));
 
+// https://clojuredocs.org/clojure.core/update
+// again, arguments order changed
 const update = R.curry((key, f, obj) => R.assoc(key, f(get(key, obj)), obj));
+
+// https://clojuredocs.org/clojure.core/update-in
+// again, argument order changed
 const updatePath = R.curry((keys, f, obj) => R.assocPath(keys, f(getPath(keys, obj)), obj));
+
+// not the best named, but removes the element at index i
 const removeAtIndex = R.curry((i, list) => {
   const split = R.splitAt(i, list);
   return R.concat(split[0], R.tail(split[1]));
 });
 
+// shuffle an array randomly
+// takes a seed, to give some controlled randomness
+// http://bost.ocks.org/mike/shuffle/
 const shuffle = R.curry((seed, list) => {
   const rand = require('random-seed').create(seed);
 
@@ -31,7 +46,8 @@ const shuffle = R.curry((seed, list) => {
 
 module.exports = {
   getDefault: getDefault, get: get, getPathDefault: getPathDefault, getPath: getPath,
-  shuffle: shuffle,
   update: update, updatePath: updatePath,
+  // specialized methods
+  shuffle: shuffle,
   removeAtIndex: removeAtIndex
 };

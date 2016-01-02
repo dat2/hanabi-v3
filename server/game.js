@@ -17,24 +17,13 @@ const jsAtom = require('js-atom');
  */
 const DEFAULT_WEIGHTS = [ [1, 1], [2, 1], [3, 1], [4, 1], [5, 1] ];
 /**
- * The default colours are red, blu, yellow and white
+ * The default colours are red, blue, yellow, white and green
  * @type {Array}
  */
 const DEFAULT_COLOURS = ['red', 'blue', 'yellow', 'white', 'green'];
 
-// app state stuff
-const appState = jsAtom.createAtom({
-  rooms: []
-});
-
-/**
- * Log the current state of atom.
- */
-function printAppState() {
-  console.log('=================================================');
-  console.dir(appState.deref(), { colors: true, depth: null });
-  console.log('=================================================');
-}
+// main app state
+const gameState = jsAtom.createAtom();
 
 /**
  * Generate a shuffled deck, of the form
@@ -53,15 +42,16 @@ function generateDeck(seed) {
   return shuffle(seed, deck);
 }
 
-// make { red: [], blue: [] }
+// make { red: [], blue: [], etc. }
 function makeStacks() {
   return R.zipObj(DEFAULT_COLOURS, R.repeat([], DEFAULT_COLOURS.length));
 }
 
-function makeGameState() {
+// generate main game state
+function makeGameState(seed) {
   return {
     // players
-    players: [],
+    players: {},
     currentlyPlaying: 0,
 
     gameOver: false,
@@ -71,7 +61,7 @@ function makeGameState() {
     infoMode: 'neither',
 
     // cards
-    deck: generateDeck(12345125),
+    deck: generateDeck(seed),
     discard: [],
     stacks: makeStacks()
   };
@@ -85,23 +75,32 @@ const removeInfo = update('info', R.dec);
 
 const setInfoModeToColour = R.assoc('infoMode', 'colour');
 const setInfoModeToNumber = R.assoc('infoMode', 'number');
+const getInfoMode = get('infoMode');
 
+// stack functions
 const getTopOfStack = colour => getPath(['stacks', colour, 0]);
 const putOnStack = R.curry((colour, number) => updatePath(['stacks', colour], R.prepend(number)));
+const isValidMove = R.curry((card, state) => {
+  const topOfStack = getTopOfStack(card.colour)(state);
+  return topOfStack === null && card.number === 1 || topOfStack === card.number - 1
+});
 
 // players functions
 function makePlayer(name) {
   return {
     name: name,
+    ready: false,
     cards: [],
     knownColours: [],
     knownNumbers: []
   };
 }
 const addPlayer = name => update('players', R.assoc(name, makePlayer(name)));
+const removePlayer = name => update('players', R.dissoc(name));
 const addCardTo = R.curry((name, card) => updatePath(['players', name, 'cards'], R.append(card)));
 const removeCardFrom = R.curry((name, i) => updatePath(['players', name, 'cards'], removeAtIndex(i)));
 const getCardAt = R.curry((name, card) => getPath(['players', name, 'cards', card]));
+const getPlayers = R.compose(Object.keys, getPath(['players']));
 
 const addKnownColour = R.curry((name, colour) =>
   updatePath(
@@ -118,11 +117,8 @@ const addKnownNumber = R.curry((name, number) =>
 
 // cards
 const peekDeck = getPath(['deck', 0]);
-const getPlayers = R.compose(
-  Object.keys,
-  getPath(['players']));
-
 const popDeck = update('deck', R.tail);
+
 const addToDiscard = card => update('discard', R.append(card));
 const dealTo = R.curry(
   (name, state) =>
@@ -131,14 +127,16 @@ const dealTo = R.curry(
       popDeck
     )(state)
 );
-// deal to each player n cards
-function dealEachN(room, n) {
-  const numPlayers = getFromRoom(room, getPlayers);
-  const ps = R.flatten(R.repeat(numPlayers, n));
-  R.forEach(name => updateRoom(room, dealTo(name)), ps);
-}
 
-// main move
+// deal to each player n cards
+const dealCards = R.curry((n, state) => {
+  const players = getPlayers(state);
+  const ps = R.flatten(R.repeat(players, n));
+  R.forEach(name => dealTo(name, state), ps);
+  return state;
+});
+
+// (1) DISCARD
 const discard = R.curry((player, card, state) => {
   const cardObj = getCardAt(player, card)(state);
 
@@ -150,59 +148,73 @@ const discard = R.curry((player, card, state) => {
   )(state);
 });
 
-// main move
+// (2) PLAY
 const play = R.curry((player, card, state) => {
-  const cardObj = getCardAt(player, card)(state);
-
-  const topOfStack = getTopOfStack(cardObj.colour)(state);
-
-  // if we have an empty stack
   var fn = R.identity;
-  if(topOfStack === null && cardObj.number === 1
-    || topOfStack === cardObj.number - 1) {
+  if(isValidMove(getCardAt(player, card)(state), state)) {
     fn = R.compose(
       putOnStack(cardObj.colour, cardObj.number),
+
+      // same for both
       removeCardFrom(player, card),
       dealTo(player)
     );
   } else {
     fn = R.compose(
       addToDiscard(cardObj),
+      removeLife,
+
+      // same for both
       removeCardFrom(player, card),
-      dealTo(player),
-      removeLife
+      dealTo(player)
     );
   }
 
   return fn(state);
 });
 
+// (3) Give Info To
+const giveInfo = R.curry((player, state) => {
+  const currentMode = getInfoMode(state);
+
+  return R.compose(
+
+  );
+});
+
 // room state functions
-function addRoom(id) {
-  appState.swap(updatePath(['rooms'], R.assoc(id, { gameState: makeGameState(), roomId: id })));
-}
-function removeRoom(id) {
-  appState.swap(updatePath(['rooms'], R.dissoc(id)));
+function updateState(f) {
+  gameState.swap(f);
 }
 
-// general functions
-function updateRoom(id, f) {
-  appState.swap(updatePath(['rooms', id, 'gameState'], f));
-}
-function getFromRoom(id, f) {
-  return R.compose(f, getPath(['rooms', id, 'gameState']))(appState.deref());
-}
-
-addRoom('main');
-updateRoom('main', addPlayer('nick'));
-updateRoom('main', addPlayer('nick2'));
-updateRoom('main', addPlayer('nick3'));
-updateRoom('main', addPlayer('nick4'));
-dealEachN('main', 5);
-updateRoom('main', play('nick4', 0));
-printAppState();
+// addPlayer('nick'));
+// addPlayer('nick2'));
+// addPlayer('nick3'));
+// addPlayer('nick4'));
+// dealCards(5);
+// play('nick4', 0);
+// printgameState();
 
 module.exports = {
-  appState: appState,
-  addRoom: addRoom, removeRoom: removeRoom,
+  current() {
+    return gameState.deref();
+  },
+  reset(seed) {
+    gameState.reset(makeGameState(seed));
+  },
+  start() {
+    updateState(dealCards(5));
+  },
+  addPlayer(name) {
+    updateState(addPlayer(name));
+  },
+  removePlayer(name) {
+    updateState(removePlayer(name));
+  },
+  play(player, card) {
+    updateState(play(player, card));
+  },
+  discard(player, card) {
+    updateState(discard(player, card));
+  }
 };
