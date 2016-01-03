@@ -1,14 +1,28 @@
 const R = require('ramda');
 const functions = require('./functions');
-const
-  get = functions.get,
-  getDefault = functions.getDefault,
-  getPath = functions.getPath,
-  getPathDefault = functions.getPathDefault,
-  update = functions.update,
-  updatePath = functions.updatePath,
-  shuffle = functions.shuffle,
-  removeAtIndex = functions.removeAtIndex;
+
+// not the best named, but removes the element at index i
+const removeAtIndex = R.curry((i, list) => {
+  const split = R.splitAt(i, list);
+  return R.concat(split[0], R.tail(split[1]));
+});
+
+// shuffle an array randomly
+// takes a seed, to give some controlled randomness
+// http://bost.ocks.org/mike/shuffle/
+const shuffle = R.curry((seed, list) => {
+  const rand = require('random-seed').create(seed);
+
+  const clone = R.clone(list);
+  var n = clone.length, t, i;
+  while (n) {
+    i = rand.random() * n-- | 0; // 0 ≤ i < n
+    t = clone[n];
+    clone[n] = clone[i];
+    clone[i] = t;
+  }
+  return clone;
+});
 
 const jsAtom = require('js-atom');
 
@@ -72,18 +86,33 @@ function makeGameState(seed) {
   };
 }
 
+// lenses
+const headLens = R.lensIndex(0);
+const livesLens = R.lensProp('lives');
+const infoLens = R.lensProp('info');
+const gameOverLens = R.lensProp('gameOver');
+const playersLens = R.lensProp('players');
+const cardsLens = player => R.lensPath(['players', player, 'cards']);
+const knownColoursLens = player => R.lensPath(['players', player, 'knownColours']);
+const knownNumbersLens = player => R.lensPath(['players', player, 'knownNumbers']);
+const currentPlayerLens = R.lensProp('currentPlayer');
+const stackLens = colour => R.lensPath(['stacks', colour]);
+const deckLens = R.lensProp('deck');
+const discardLens = R.lensProp('discard');
+
 // game state functions
-const removeLife = update('lives', R.compose(R.max(0), R.dec));
+const removeLife = R.over(livesLens, R.compose(R.max(0), R.dec));
 
-const addInfo = update('info', R.compose(R.min(8), R.inc));
-const removeInfo = update('info', R.dec);
+const addInfo = R.over(infoLens, R.compose(R.min(8), R.inc));
+const removeInfo = R.over(infoLens, R.dec);
 
-const endGame = R.assoc('gameOver', true);
+const endGame = R.set(gameOverLens, true);
 
-const setFirstPlayer = state => {
-  const first = R.compose(R.head, getPlayers)(state);
-  return R.assoc('currentPlayer', first)(state);
-};
+const getPlayers = R.compose(R.keys, R.view(playersLens));
+const getFirstPlayer = R.compose(R.head, getPlayers);
+const getCurrentPlayer = R.view(currentPlayerLens);
+
+const setFirstPlayer = state => R.set(currentPlayerLens, getFirstPlayer(state), state);
 const setNextPlayer = state => {
   const players = getPlayers(state);
   const player = getCurrentPlayer(state);
@@ -91,16 +120,18 @@ const setNextPlayer = state => {
   const playerIndex = R.indexOf(player, players);
   const nextIndex = (playerIndex + 1) % players.length;
 
-  return R.assoc('currentPlayer', players[nextIndex])(state);
+  return R.set(currentPlayerLens, players[nextIndex], state);
 };
-const getCurrentPlayer = get('currentPlayer');
 
 // stack functions
-const getTopOfStack = colour => getPath(['stacks', colour, 0]);
-const putOnStack = R.curry((colour, number) => updatePath(['stacks', colour], R.prepend(number)));
+const getTopOfStack = colour => R.compose(
+  R.head,
+  R.view(stackLens(colour))
+);
+const putOnStack = R.curry((colour, number) => R.over(stackLens(colour), R.prepend(number)));
 const isValidMove = R.curry((card, state) => {
   const topOfStack = getTopOfStack(card.colour)(state);
-  return topOfStack === null && card.number === 1 || topOfStack === card.number - 1
+  return topOfStack === undefined && card.number === 1 || topOfStack === card.number - 1
 });
 
 // players functions
@@ -113,31 +144,31 @@ function makePlayer(name) {
     knownNumbers: []
   };
 }
-const addPlayer = name => update('players', R.assoc(name, makePlayer(name)));
-const removePlayer = name => update('players', R.dissoc(name));
-const addCardTo = R.curry((name, card) => updatePath(['players', name, 'cards'], R.append(card)));
-const removeCardFrom = R.curry((name, i) => updatePath(['players', name, 'cards'], removeAtIndex(i)));
-const getCardAt = R.curry((name, card) => getPath(['players', name, 'cards', card]));
-const getPlayers = R.compose(Object.keys, getPath(['players']));
+const addPlayer = name => R.over(playersLens, R.assoc(name, makePlayer(name)));
+const removePlayer = name => R.over(playersLens, R.dissoc(name));
+const addCardTo = R.curry((name, card) => R.over(cardsLens(name), R.append(card)));
+const removeCardFrom = R.curry((name, i) => R.over(cardsLens(name), removeAtIndex(i)));
+const getCardAt = R.curry((name, card) => R.view(R.compose(cardsLens(name), R.lensIndex(card))));
 
 const addKnownColour = R.curry((colour, name) =>
-  updatePath(
-    ['players', name, 'knownColours'],
+  R.over(
+    knownColoursLens(name),
     R.compose(R.uniq, R.append(colour))
-  )
-);
+  ));
 const addKnownNumber = R.curry((number, name) =>
-  updatePath(
-    ['players', name, 'knownNumbers'],
+  R.over(
+    knownNumbersLens(name),
     R.compose(R.uniq, R.append(number))
-  )
-);
+  ));
 
 // cards
-const peekDeck = getPath(['deck', 0]);
-const popDeck = update('deck', R.tail);
+const peekDeck = R.compose(
+  R.head,
+  R.view(deckLens)
+);
+const popDeck = R.over(deckLens, R.tail);
 
-const addToDiscard = card => update('discard', R.prepend(card));
+const addToDiscard = card => R.over(discardLens, R.prepend(card));
 const dealTo = R.curry((name, state) =>
   R.compose(
     addCardTo(name, peekDeck(state)),
@@ -156,7 +187,7 @@ const dealCards = R.curry((n, state) => {
 
 const checkGameOver = R.curry((card, state) => {
   // check if this is the last card in the discard
-  const discard = get('discard')(state);
+  const discard = R.view(discardLens, state);
 
   const cardToString = card => `${card.number}-${card.colour}`;
 
@@ -222,6 +253,7 @@ const giveInfo = R.curry((type, player, card, state) => {
   const cardObj = getCardAt(player, card)(state);
 
   const fn = type === 'number' ? addKnownNumber(cardObj.number) : addKnownColour(cardObj.colour);
+
   return R.compose(
     fn(player),
     setNextPlayer,
@@ -242,14 +274,15 @@ module.exports = {
     gameState.reset(makeGameState(seed));
   },
   start() {
-    updateState(dealCards(5));
     updateState(setFirstPlayer);
+    updateState(dealCards(5));
   },
   addPlayer(name) {
     updateState(addPlayer(name));
   },
   hasPlayer(name) {
-    return getPath(['players', name], gameState.deref()) !== null;
+    console.log()
+    return R.view(R.lensPath(['players', name]), gameState.deref()) !== undefined;
   },
   removePlayer(name) {
     updateState(removePlayer(name));
